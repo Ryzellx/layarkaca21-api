@@ -74,7 +74,7 @@ export const swaggerSpec = {
         parameters: [
           {
             in: 'query',
-            name: 's',
+            name: 'q',
             required: true,
             schema: { type: 'string' }
           }
