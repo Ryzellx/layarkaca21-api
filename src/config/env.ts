@@ -6,6 +6,11 @@ dotenv.config({ path: path.resolve(__dirname, '../../.env.local') });
 export const config = {
   port: process.env.PORT || 3000,
   redisUrl: process.env.REDIS_URL || '',
-  lk21BaseUrl: (process.env.LK21_BASE_URL || 'https://tv12.lk21official.cc').replace(/\/$/, ''),
+  lk21BaseUrl: (process.env.LK21_BASE_URLS || process.env.LK21_BASE_URL || 'https://tv12.lk21official.cc').split(',')[0].trim().replace(/\/$/, ''),
+  lk21BaseUrls: (process.env.LK21_BASE_URLS || process.env.LK21_BASE_URL || 'https://tv12.lk21official.cc')
+    .split(',')
+    .map((s) => s.trim().replace(/\/$/, ''))
+    .filter(Boolean),
+  proxyUrl: process.env.LK21_PROXY_URL || process.env.HTTPS_PROXY || process.env.HTTP_PROXY || '',
   nodeEnv: process.env.NODE_ENV || 'development'
 };

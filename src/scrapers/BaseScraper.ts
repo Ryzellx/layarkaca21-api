@@ -16,86 +16,138 @@ export class BaseScraper {
   protected get baseUrl() {
     return config.lk21BaseUrl;
   }
-  protected async fetchHtml(endpoint: string): Promise<cheerio.CheerioAPI> {
-    try {
-      const url = endpoint.startsWith('http') ? endpoint : `${this.baseUrl}${endpoint}`;
-      
-      // Generate a random IP to attempt bypassing some WAF rules
-      const randomIp = `${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}`;
-      
-      const response = await axios.get(url, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-          'Accept-Language': 'en-US,en;q=0.9,id;q=0.8',
-          'Referer': 'https://www.google.com/',
-          'X-Forwarded-For': randomIp,
-          'X-Real-IP': randomIp,
-          'Cache-Control': 'max-age=0',
-          'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-          'Sec-Ch-Ua-Mobile': '?0',
-          'Sec-Ch-Ua-Platform': '"Windows"',
-          'Sec-Fetch-Dest': 'document',
-          'Sec-Fetch-Mode': 'navigate',
-          'Sec-Fetch-Site': 'cross-site',
-          'Sec-Fetch-User': '?1',
-          'Upgrade-Insecure-Requests': '1'
-        },
-        httpsAgent: new https.Agent({ family: 4 }), // Force IPv4
-        timeout: 15000
-      });
-      
-      const finalUrl = response.request?.res?.responseUrl || '';
-      if (finalUrl) {
-        const finalPath = new URL(finalUrl).pathname;
-        const requestedPath = endpoint.startsWith('http') ? new URL(endpoint).pathname : endpoint;
-        if (finalPath === '/' && requestedPath !== '/' && requestedPath !== '') {
-          throw new PageNotFoundError();
-        }
+
+  protected get baseUrls(): string[] {
+    return config.lk21BaseUrls?.length ? config.lk21BaseUrls : [config.lk21BaseUrl];
+  }
+
+  private buildAxiosConfig(url: string, baseUrl: string) {
+    const cfg: any = {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7',
+        'Referer': `${baseUrl}/`,
+        'Connection': 'keep-alive',
+        'Cache-Control': 'max-age=0',
+        'Sec-Ch-Ua': '"Not/A)Brand";v="8", "Chromium";v="126", "Google Chrome";v="126"',
+        'Sec-Ch-Ua-Mobile': '?0',
+        'Sec-Ch-Ua-Platform': '"Windows"',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'same-origin',
+        'Sec-Fetch-User': '?1',
+        'Upgrade-Insecure-Requests': '1'
+      },
+      httpsAgent: new https.Agent({ family: 4, keepAlive: true }),
+      timeout: 20000,
+      maxRedirects: 5,
+      validateStatus: (s: number) => s < 500,
+    };
+    if (config.proxyUrl) {
+      try {
+        const p = new URL(config.proxyUrl);
+        cfg.proxy = {
+          host: p.hostname,
+          port: Number(p.port) || (p.protocol === 'https:' ? 443 : 80),
+          ...(p.username ? { auth: { username: decodeURIComponent(p.username), password: decodeURIComponent(p.password) } } : {}),
+          protocol: p.protocol.replace(':', ''),
+        };
+      } catch {
+        logger.warn(`Invalid proxy URL: ${config.proxyUrl}`);
       }
+    }
+    return cfg;
+  }
 
-      const $ = cheerio.load(response.data);
-      
-      // Auto-handle LK21 redirects to other domains (like Nontondrama)
-      const redirectBtn = $('a:contains("Buka Sekarang"), a:contains("Nontondrama")');
-      if (redirectBtn.length > 0 && redirectBtn.attr('href')) {
-        const targetUrl = redirectBtn.attr('href') as string;
-        logger.info(`Following redirect to ${targetUrl}`);
-        const targetResponse = await axios.get(targetUrl, {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          },
-          timeout: 10000
-        });
+  protected async fetchHtml(endpoint: string): Promise<cheerio.CheerioAPI> {
+    const isAbsolute = endpoint.startsWith('http');
+    const bases = isAbsolute ? [''] : this.baseUrls;
+    const tried: Array<{ base: string; status?: number; error?: string }> = [];
 
-        const targetFinalUrl = targetResponse.request?.res?.responseUrl || '';
-        if (targetFinalUrl) {
-          const finalPath = new URL(targetFinalUrl).pathname;
-          const requestedPath = endpoint.startsWith('http') ? new URL(endpoint).pathname : endpoint;
+    for (const base of bases) {
+      const url = isAbsolute ? endpoint : `${base}${endpoint}`;
+      const baseLabel = isAbsolute ? new URL(endpoint).origin : base;
+      try {
+        const response = await axios.get(url, this.buildAxiosConfig(url, baseLabel));
+
+        if (response.status === 403 || response.status === 401 || response.status === 429) {
+          tried.push({ base: baseLabel, status: response.status });
+          logger.error(`Upstream ${response.status} for ${endpoint} via ${baseLabel}`);
+          continue;
+        }
+        if (response.status >= 400) {
+          const upstream: any = new Error(`Upstream LK21 error: ${response.status}`);
+          upstream.status = response.status === 404 ? 404 : 502;
+          upstream.upstreamStatus = response.status;
+          upstream.triedBases = tried;
+          throw upstream;
+        }
+
+        const finalUrl = response.request?.res?.responseUrl || '';
+        if (finalUrl) {
+          const finalPath = new URL(finalUrl).pathname;
+          const requestedPath = isAbsolute ? new URL(endpoint).pathname : endpoint;
           if (finalPath === '/' && requestedPath !== '/' && requestedPath !== '') {
             throw new PageNotFoundError();
           }
         }
 
-        return cheerio.load(targetResponse.data);
+        const $ = cheerio.load(response.data);
+
+        const redirectBtn = $('a:contains("Buka Sekarang"), a:contains("Nontondrama")');
+        if (redirectBtn.length > 0 && redirectBtn.attr('href')) {
+          const targetUrl = redirectBtn.attr('href') as string;
+          logger.info(`Following redirect to ${targetUrl}`);
+          const targetResponse = await axios.get(targetUrl, this.buildAxiosConfig(targetUrl, baseLabel));
+
+          const targetFinalUrl = targetResponse.request?.res?.responseUrl || '';
+          if (targetFinalUrl) {
+            const finalPath = new URL(targetFinalUrl).pathname;
+            const requestedPath = isAbsolute ? new URL(endpoint).pathname : endpoint;
+            if (finalPath === '/' && requestedPath !== '/' && requestedPath !== '') {
+              throw new PageNotFoundError();
+            }
+          }
+
+          return cheerio.load(targetResponse.data);
+        }
+
+        return $;
+      } catch (error: any) {
+        if (error instanceof PageNotFoundError) {
+          throw error;
+        }
+        if (error?.triedBases) {
+          throw error;
+        }
+        if (axios.isAxiosError(error) && error?.response) {
+          const status = error.response.status;
+          if (status === 403 || status === 401 || status === 429) {
+            tried.push({ base: baseLabel, status });
+            logger.error(`Upstream ${status} for ${endpoint} via ${baseLabel}`);
+            continue;
+          }
+          const upstream: any = new Error(`Upstream LK21 error: ${status}`);
+          upstream.status = status === 404 ? 404 : 502;
+          upstream.upstreamStatus = status;
+          upstream.triedBases = tried;
+          logger.error(`Upstream ${status} for ${endpoint} via ${baseLabel}`, error?.message);
+          throw upstream;
+        }
+        tried.push({ base: baseLabel, error: error?.message || String(error) });
+        logger.error(`Failed to fetch ${endpoint} via ${baseLabel}`, error?.message || error);
       }
-      
-      return $;
-    } catch (error: any) {
-      if (error instanceof PageNotFoundError) {
-        throw error;
-      }
-      if (axios.isAxiosError(error) && error?.response) {
-        const status = error.response.status;
-        const upstream: any = new Error(`Upstream LK21 error: ${status}`);
-        upstream.status = status === 404 ? 404 : 502;
-        upstream.upstreamStatus = status;
-        logger.error(`Upstream ${status} for ${endpoint}`, error?.message);
-        throw upstream;
-      }
-      logger.error(`Failed to fetch ${endpoint}`, error);
-      throw error;
     }
+
+    const last = tried[tried.length - 1];
+    const upstream: any = new Error(
+      last?.status ? `Upstream LK21 error: ${last.status}` : `Upstream LK21 unreachable: ${last?.error || 'unknown'}`
+    );
+    upstream.status = 502;
+    if (last?.status) upstream.upstreamStatus = last.status;
+    upstream.triedBases = tried;
+    throw upstream;
   }
 
   protected extractText($: cheerio.CheerioAPI, context: any, selectors: string[]): string {

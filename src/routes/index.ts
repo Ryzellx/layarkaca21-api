@@ -31,7 +31,7 @@ import {
   getGenres
 } from '../controllers/NavigationController';
 import { getCategoryMovies, getRootCategoryMovies } from '../controllers/CategoryController';
-import { getTopBoxOffice, getComingSoon, getNews, getTrailers, getHealth } from '../controllers/MiscController';
+import { getTopBoxOffice, getComingSoon, getNews, getTrailers, getHealth, getDebugUpstream } from '../controllers/MiscController';
 import { cache } from '../middlewares/cache';
 import { runCron } from '../controllers/CronController';
 
@@ -92,5 +92,6 @@ router.get('/news', cache(3600), getNews);
 router.get('/trailers', cache(3600), getTrailers);
 
 router.get('/health', getHealth);
+router.get('/debug/upstream', getDebugUpstream);
 
 export default router;
