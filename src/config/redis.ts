@@ -2,12 +2,34 @@ import Redis from 'ioredis';
 import { config } from './env';
 import { logger } from './logger';
 
-export const redis = new Redis(config.redisUrl);
-
-redis.on('connect', () => {
-  logger.info('Redis connected successfully');
+const createNoopRedis = () => ({
+  status: 'disabled',
+  get: async () => null,
+  set: async () => 'OK',
+  on: () => {},
 });
 
-redis.on('error', (err) => {
-  logger.error('Redis connection error', err);
-});
+let redisInstance: any;
+
+if (config.redisUrl) {
+  const client = new Redis(config.redisUrl, {
+    maxRetriesPerRequest: 1,
+    enableReadyCheck: false,
+    retryStrategy: () => null,
+  });
+
+  client.on('connect', () => {
+    logger.info('Redis connected successfully');
+  });
+
+  client.on('error', (err) => {
+    logger.error('Redis connection error', err);
+  });
+
+  redisInstance = client;
+} else {
+  logger.warn('REDIS_URL not set, running without cache');
+  redisInstance = createNoopRedis();
+}
+
+export const redis = redisInstance;

@@ -8,6 +8,10 @@ export const cache = (durationInSeconds: number) => {
       return next();
     }
 
+    if (!redis || redis.status === 'disabled') {
+      return next();
+    }
+
     const key = `__express__${req.originalUrl || req.url}`;
 
     try {

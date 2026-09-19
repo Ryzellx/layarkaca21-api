@@ -1,6 +1,7 @@
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import { logger } from '../config/logger';
+import { config } from '../config/env';
 import https from 'https';
 
 export class PageNotFoundError extends Error {
@@ -12,8 +13,9 @@ export class PageNotFoundError extends Error {
 }
 
 export class BaseScraper {
-  protected baseUrl = 'https://tv11.lk21official.cc';
-  
+  protected get baseUrl() {
+    return config.lk21BaseUrl;
+  }
   protected async fetchHtml(endpoint: string): Promise<cheerio.CheerioAPI> {
     try {
       const url = endpoint.startsWith('http') ? endpoint : `${this.baseUrl}${endpoint}`;
@@ -79,9 +81,17 @@ export class BaseScraper {
       }
       
       return $;
-    } catch (error) {
+    } catch (error: any) {
       if (error instanceof PageNotFoundError) {
         throw error;
+      }
+      if (axios.isAxiosError(error) && error?.response) {
+        const status = error.response.status;
+        const upstream: any = new Error(`Upstream LK21 error: ${status}`);
+        upstream.status = status === 404 ? 404 : 502;
+        upstream.upstreamStatus = status;
+        logger.error(`Upstream ${status} for ${endpoint}`, error?.message);
+        throw upstream;
       }
       logger.error(`Failed to fetch ${endpoint}`, error);
       throw error;
